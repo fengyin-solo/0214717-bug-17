@@ -125,7 +125,7 @@
 import Modal from '../components/Modal.vue'
 import Toast from '../components/Toast.vue'
 import { authState, logout } from '../utils/auth'
-import { logger } from '../utils/api'
+import { api, logger } from '../utils/api'
 
 export default {
   name: 'Profile',
@@ -149,11 +149,7 @@ export default {
       toastMessage: '',
       editForm: { name: '', phone: '', email: '' },
       statusText: { completed: '已完成', upcoming: '待使用', cancelled: '已取消' },
-      recentBookings: [
-        { id: 1, orderNo: 'BK20260001', tableName: '3号球桌 - 美式九球', date: '2026-02-15', time: '14:00 - 16:00', status: 'upcoming' },
-        { id: 2, orderNo: 'BK20260002', tableName: '1号球桌 - 斯诺克', date: '2026-02-10', time: '19:00 - 21:00', status: 'completed' },
-        { id: 3, orderNo: 'BK20260003', tableName: '5号球桌 - 中式八球', date: '2026-02-08', time: '10:00 - 12:00', status: 'completed' }
-      ],
+      recentBookings: [],
       quickActions: [
         { id: 1, name: '任务中心', icon: '📋', action: 'tasks' },
         { id: 2, name: '优惠券', icon: '🎫', action: 'coupon' },
@@ -186,10 +182,20 @@ export default {
       phone: this.user.phone || '',
       email: this.user.email || ''
     }
+    this.loadBookings()
   },
   methods: {
-    getDay(date) { return new Date(date).getDate() },
-    getMonth(date) { return ['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'][new Date(date).getMonth()] },
+    /**
+     * 拉取当前账号的预约记录（服务端按令牌账号过滤，刷新后数据仍然归属正确）
+     */
+    async loadBookings() {
+      const result = await api.getBookings()
+      if (result.success) {
+        this.recentBookings = result.data.slice(0, 3)
+      }
+    },
+    getDay(date) { return date ? new Date(date).getDate() : '' },
+    getMonth(date) { return ['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'][date ? new Date(date).getMonth() : 0] },
     handleNavClick(nav) {
       this.activeNav = nav
       if (nav === 'info') {
@@ -218,22 +224,42 @@ export default {
         return
       }
       this.saveLoading = true
-      await new Promise(resolve => setTimeout(resolve, 1000))
-      if (authState.user) {
-        authState.user.name = this.editForm.name
-      }
+
+      // 受保护写操作：服务端只允许修改白名单字段，积分/等级等不可篡改
+      const result = await api.updateProfile({
+        name: this.editForm.name.trim(),
+        phone: this.editForm.phone,
+        email: this.editForm.email
+      })
+
       this.saveLoading = false
-      this.showEditModal = false
-      this.showNotification('success', '保存成功', '个人资料已更新')
-      logger.info('Profile updated', { name: this.editForm.name })
+
+      if (result.success) {
+        authState.user = result.data
+        this.editForm.name = result.data.name
+        this.showEditModal = false
+        this.showNotification('success', '保存成功', '个人资料已更新')
+        logger.info('Profile updated', { name: result.data.name })
+      } else {
+        this.showEditModal = false
+        this.showNotification('error', '保存失败', result.error || '请稍后重试')
+      }
     },
     viewBookingDetail(booking) { this.selectedBooking = booking; this.showBookingDetailModal = true },
-    handleBookingAction() {
+    async handleBookingAction() {
       if (this.selectedBooking?.status === 'upcoming') {
-        this.selectedBooking.status = 'cancelled'
+        const result = await api.doTaskAction({
+          taskId: this.selectedBooking.id || this.selectedBooking.orderNo,
+          action: 'cancel'
+        })
         this.showBookingDetailModal = false
-        this.showNotification('success', '取消成功', '预约已取消')
-        logger.info('Booking cancelled', { orderNo: this.selectedBooking.orderNo })
+        if (result.success) {
+          this.selectedBooking.status = 'cancelled'
+          this.showNotification('success', '取消成功', '预约已取消')
+          logger.info('Booking cancelled', { orderNo: this.selectedBooking.orderNo })
+        } else {
+          this.showNotification('error', '取消失败', result.error || '请稍后重试')
+        }
       } else { this.showBookingDetailModal = false }
     },
     handleAction(action) {
@@ -243,21 +269,31 @@ export default {
         this.showNotification('info', action.name, '功能开发中，敬请期待')
       }
     },
-    exchangeGift(gift) {
-      if (authState.user && authState.user.points >= gift.points) {
-        authState.user.points -= gift.points
+    async exchangeGift(gift) {
+      if (!authState.user || authState.user.points < gift.points) {
+        this.showNotification('error', '积分不足', `兑换${gift.name}需要${gift.points}积分`)
+        return
+      }
+      // 受保护写操作：余额扣减由服务端完成，避免前端篡改积分
+      const result = await api.exchangePoints({ points: gift.points })
+      if (result.success) {
+        authState.user = result.data.profile
         this.showExchangeModal = false
         this.successTitle = '兑换成功'
         this.successMessage = `您已成功兑换 ${gift.name}`
         this.showSuccessModal = true
         logger.info('Gift exchanged', { gift: gift.name, points: gift.points })
+      } else {
+        this.showExchangeModal = false
+        this.showNotification('error', '兑换失败', result.error || '请稍后重试')
       }
     },
     async handleLogout() {
       this.showLogoutModal = false
       logger.info('User logging out')
       await logout()
-      this.$router.push('/login')
+      // /login 路由不存在会导致空白页，统一回到首页
+      this.$router.replace('/')
     },
     showNotification(type, title, message) { this.toastType = type; this.toastTitle = title; this.toastMessage = message; this.showToast = true }
   }

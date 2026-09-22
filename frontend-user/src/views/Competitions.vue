@@ -120,21 +120,18 @@
     </Modal>
 
     <Toast v-model="showToast" :type="toastType" :title="toastTitle" :message="toastMessage" />
-
-    <LoginModal v-model="showLoginModal" @login-success="onLoginSuccess" />
   </div>
 </template>
 
 <script>
 import Modal from '../components/Modal.vue'
 import Toast from '../components/Toast.vue'
-import LoginModal from '../components/LoginModal.vue'
-import { isAuthenticated } from '../utils/auth'
-import { taskStore } from '../utils/taskStore'
+import { requireLogin } from '../utils/auth'
+import { api } from '../utils/api'
 
 export default {
   name: 'Competitions',
-  components: { Modal, Toast, LoginModal },
+  components: { Modal, Toast },
   data() {
     return {
       activeTab: 'upcoming',
@@ -149,8 +146,6 @@ export default {
       toastType: 'success',
       toastTitle: '',
       toastMessage: '',
-      showLoginModal: false,
-      pendingComp: null,
       tabs: [
         { id: 'upcoming', name: '即将开始', icon: '📅' },
         { id: 'ongoing', name: '进行中', icon: '🔴' },
@@ -175,44 +170,36 @@ export default {
     getDay(date) { return new Date(date).getDate() },
     formatNumber(num) { return num.toLocaleString() },
     getActionText(status) { return { upcoming: '立即报名', ongoing: '观看直播', finished: '查看结果' }[status] },
-    handleAction(comp) {
+    async handleAction(comp) {
       this.selectedComp = comp
       if (comp.status === 'upcoming') {
-        // 报名需要登录
-        if (!isAuthenticated()) {
-          this.pendingComp = comp
-          this.showLoginModal = true
-          return
-        }
+        // 报名需要登录：未登录则拉起全局登录弹窗，成功后自动继续
+        const loggedIn = await requireLogin('报名赛事')
+        if (!loggedIn) return
         this.showJoinModal = true
       }
       else if (comp.status === 'ongoing') this.showLiveModal = true
       else this.showResultModal = true
     },
-    onLoginSuccess() {
-      this.showLoginModal = false
-      if (this.pendingComp) {
-        this.selectedComp = this.pendingComp
-        this.showJoinModal = true
-        this.pendingComp = null
-      }
-    },
     async confirmJoin() {
       this.joinLoading = true
-      await new Promise(resolve => setTimeout(resolve, 1500))
-      const regInfo = { 
-        regNo: 'REG' + Date.now().toString().slice(-8), 
-        playerNo: Math.floor(Math.random() * 100) + 1 
-      }
-      this.joinResult = { ...regInfo, compName: this.selectedComp.name }
-      
-      // 添加到任务中心
-      taskStore.addCompetitionTask(this.selectedComp, regInfo)
-      
+
+      // 受保护写操作：服务端凭令牌归属创建报名任务
+      const result = await api.joinCompetition({ competitionId: this.selectedComp.id })
+
       this.joinLoading = false
+
+      if (!result.success) {
+        this.showJoinModal = false
+        this.showNotification('error', '报名失败', result.error || '请稍后重试')
+        return
+      }
+
+      this.joinResult = { ...result.data, compName: this.selectedComp.name }
+
       this.showJoinModal = false
       this.showSuccessModal = true
-      
+
       this.showNotification('info', '已添加到任务中心', `您可以在任务中心查看并管理此赛事`)
     },
     viewJoinDetail() {

@@ -1,17 +1,11 @@
 <!--
   NavBar.vue - 全局导航栏组件
-  
+
   功能说明：
   - 显示品牌Logo和导航链接
   - 滚动时自动添加背景模糊效果
   - 根据登录状态显示用户头像或登录按钮
-  
-  Props:
-  - isLoggedIn: Boolean - 用户登录状态
-  - userName: String - 用户名称（用于显示头像首字母）
-  
-  Events:
-  - @login-click: 点击登录按钮时触发
+  - 点击登录直接打开全局登录弹窗（全应用唯一实例）
 -->
 <template>
   <nav class="navbar" :class="{ scrolled: isScrolled }">
@@ -27,7 +21,7 @@
         </div>
         <span class="brand-text">BILLIARD<span class="accent">CLUB</span></span>
       </div>
-      
+
       <!-- 导航链接 -->
       <div class="nav-links">
         <router-link to="/" class="nav-link">
@@ -54,14 +48,14 @@
           <span class="link-text">任务中心</span>
           <span class="link-indicator"></span>
         </router-link>
-        
+
         <!-- 用户头像（已登录） -->
         <router-link v-if="isLoggedIn" to="/profile" class="nav-link profile-link">
           <div class="avatar-mini">{{ userName.charAt(0) }}</div>
         </router-link>
-        
+
         <!-- 登录按钮（未登录） -->
-        <button v-else class="nav-link login-btn" @click="$emit('login-click')">
+        <button v-else type="button" class="nav-link login-btn" @click="openLogin()">
           <span>登录</span>
         </button>
       </div>
@@ -74,13 +68,14 @@
  * 导航栏组件
  * 响应滚动事件，动态切换样式
  */
+import { openLoginModal } from '../utils/auth'
+
 export default {
   name: 'NavBar',
   props: {
     isLoggedIn: { type: Boolean, default: false },
     userName: { type: String, default: 'U' }
   },
-  emits: ['login-click'],
   data() {
     return {
       isScrolled: false // 页面是否已滚动
@@ -95,6 +90,12 @@ export default {
     window.removeEventListener('scroll', this.handleScroll)
   },
   methods: {
+    /**
+     * 打开全局登录弹窗
+     */
+    openLogin() {
+      openLoginModal()
+    },
     /**
      * 处理页面滚动
      * 滚动超过50px时添加背景效果

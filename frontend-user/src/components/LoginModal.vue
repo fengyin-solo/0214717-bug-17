@@ -1,7 +1,7 @@
 <template>
   <Teleport to="body">
     <Transition name="modal">
-      <div v-if="modelValue" class="login-overlay" @click.self="close">
+      <div v-if="visible" class="login-overlay" @click.self="close">
         <div class="login-modal">
           <button class="modal-close" @click="close">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -19,6 +19,13 @@
             </div>
             <h2>登录账户</h2>
             <p>登录后享受更多服务</p>
+          </div>
+
+          <div v-if="notice" class="login-notice">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>
+            </svg>
+            <span>{{ notice }}</span>
           </div>
 
           <form class="login-form" @submit.prevent="handleLogin">
@@ -72,18 +79,54 @@
 </template>
 
 <script>
-import { login } from '../utils/auth'
+import { authState, login, resolveLoginModal, dismissLoginModal } from '../utils/auth'
 import { logger } from '../utils/api'
 
 export default {
   name: 'LoginModal',
-  props: { modelValue: Boolean },
-  emits: ['update:modelValue', 'success'],
   data() {
-    return { username: '', password: '', showPassword: false, loading: false, error: null }
+    return {
+      username: '',
+      password: '',
+      showPassword: false,
+      localLoading: false,
+      error: null
+    }
+  },
+  computed: {
+    /** 弹窗可见性由认证模块统一管理，全应用只有这一个实例 */
+    visible() {
+      return authState.loginVisible
+    },
+    notice() {
+      return authState.loginNotice
+    },
+    isLoggedIn() {
+      return authState.isLoggedIn
+    },
+    loading() {
+      return this.localLoading || authState.loading
+    }
+  },
+  watch: {
+    visible(open) {
+      // 每次打开时重置表单与错误，避免残留上次输入/失败提示
+      if (open) {
+        this.username = ''
+        this.password = ''
+        this.showPassword = false
+        this.error = null
+      }
+    },
+    isLoggedIn(val) {
+      // 会话恢复或其它途径已登录时，确保弹窗关闭且等待中的操作被放行
+      if (val && authState.loginVisible) resolveLoginModal(authState.user)
+    }
   },
   methods: {
-    close() { this.$emit('update:modelValue', false) },
+    close() {
+      dismissLoginModal()
+    },
     async handleLogin() {
       this.error = null
       // 表单验证
@@ -95,16 +138,14 @@ export default {
         this.error = '密码至少需要6个字符'
         return
       }
-      this.loading = true
+      this.localLoading = true
       try {
         logger.info('Login attempt', { username: this.username })
-        const result = await login(this.username, this.password)
+        const result = await login(this.username.trim(), this.password)
         if (result.success) {
           logger.info('Login successful')
-          this.$emit('success', result.user)
-          this.close()
-          this.username = ''
-          this.password = ''
+          // 统一由认证模块关闭弹窗并放行等待中的受保护操作
+          resolveLoginModal(result.user)
         } else {
           this.error = result.error || '登录失败'
         }
@@ -112,7 +153,7 @@ export default {
         this.error = '系统错误，请重试'
         logger.error('Login error', e)
       } finally {
-        this.loading = false
+        this.localLoading = false
       }
     }
   }
@@ -129,6 +170,8 @@ export default {
 .logo { width: 50px; height: 50px; color: var(--primary); margin: 0 auto 1rem; }
 .login-header h2 { font-family: 'Space Grotesk', sans-serif; font-size: 1.5rem; margin-bottom: 0.25rem; }
 .login-header p { color: var(--text-secondary); font-size: 0.9rem; }
+.login-notice { display: flex; align-items: center; gap: 0.5rem; padding: 0.6rem 0.8rem; background: rgba(0,217,165,0.08); border: 1px solid rgba(0,217,165,0.2); border-radius: 8px; color: var(--primary); font-size: 0.8rem; margin-bottom: 0; }
+.login-notice svg { width: 16px; height: 16px; flex-shrink: 0; }
 .login-form { display: flex; flex-direction: column; gap: 1.25rem; }
 .form-group { display: flex; flex-direction: column; gap: 0.4rem; }
 .form-group label { font-size: 0.85rem; color: var(--text-secondary); }

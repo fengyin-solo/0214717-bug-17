@@ -15,12 +15,11 @@
 <template>
   <div id="app">
     <!-- 导航栏组件 -->
-    <NavBar 
-      :is-logged-in="isLoggedIn" 
+    <NavBar
+      :is-logged-in="isLoggedIn"
       :user-name="userName"
-      @login-click="openLogin"
     />
-    
+
     <!-- 主内容区域 -->
     <main class="main-content">
       <router-view v-slot="{ Component }">
@@ -29,36 +28,31 @@
         </transition>
       </router-view>
     </main>
-    
+
     <!-- 页脚组件 -->
     <FooterBar />
-    
-    <!-- 登录弹窗 -->
-    <LoginModal v-model="showLoginModal" @success="onLoginSuccess" />
+
+    <!-- 全局唯一登录弹窗（由认证模块统一调度） -->
+    <LoginModal />
   </div>
 </template>
 
 <script>
 /**
  * 应用根组件
- * 负责整合全局布局组件和管理登录状态
+ * 负责整合全局布局组件，并响应会话登录/退出/失效事件
  */
-import { authState } from './utils/auth'
+import { authState, onAuthEvent, openLoginModal } from './utils/auth'
 import NavBar from './components/NavBar.vue'
 import FooterBar from './components/FooterBar.vue'
 import LoginModal from './components/LoginModal.vue'
 
 export default {
   name: 'App',
-  components: { 
+  components: {
     NavBar,
     FooterBar,
-    LoginModal 
-  },
-  data() {
-    return {
-      showLoginModal: false // 登录弹窗显示状态
-    }
+    LoginModal
   },
   computed: {
     /**
@@ -76,20 +70,24 @@ export default {
       return authState.user?.name || 'U'
     }
   },
-  methods: {
-    /**
-     * 打开登录弹窗
-     */
-    openLogin() {
-      this.showLoginModal = true
-    },
-    /**
-     * 登录成功回调
-     * 可在此处添加登录成功后的全局处理逻辑
-     */
-    onLoginSuccess() {
-      // 登录成功后的处理
-    }
+  mounted() {
+    // 订阅认证事件：退出或会话失效时离开受保护页面，避免残留旧账户数据
+    this.unsubscribeAuth = onAuthEvent((type) => {
+      if (type === 'logout' || type === 'session-expired') {
+        const protectedRoutes = ['/profile', '/tasks']
+        if (protectedRoutes.includes(this.$route.path)) {
+          this.$router.replace('/')
+        }
+      }
+      // 受保护路由守卫重定向回首页后，自动拉起登录弹窗（并携带操作提示）
+      if (type === 'unauthorized' && this.$route.query.login === 'required') {
+        const notice = this.$route.query.notice ? { notice: this.$route.query.notice } : undefined
+        openLoginModal(notice)
+      }
+    })
+  },
+  beforeUnmount() {
+    if (this.unsubscribeAuth) this.unsubscribeAuth()
   }
 }
 </script>

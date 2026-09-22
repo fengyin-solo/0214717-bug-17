@@ -195,9 +195,6 @@
     <!-- Toast -->
     <Toast v-model="showToast" :type="toastType" :title="toastTitle" :message="toastMessage" />
 
-    <!-- Login Modal -->
-    <LoginModal v-model="showLoginModal" @login-success="onLoginSuccess" />
-
     <!-- My Courses Modal -->
     <Modal v-model="showMyCoursesModal" title="我的课程" size="medium" :show-footer="false">
       <div class="my-courses-content">
@@ -227,13 +224,12 @@
 <script>
 import Modal from '../components/Modal.vue'
 import Toast from '../components/Toast.vue'
-import LoginModal from '../components/LoginModal.vue'
-import { isAuthenticated } from '../utils/auth'
-import { taskStore } from '../utils/taskStore'
+import { requireLogin } from '../utils/auth'
+import { api } from '../utils/api'
 
 export default {
   name: 'Courses',
-  components: { Modal, Toast, LoginModal },
+  components: { Modal, Toast },
   data() {
     return {
       showDetailModal: false,
@@ -249,8 +245,6 @@ export default {
       toastType: 'success',
       toastTitle: '',
       toastMessage: '',
-      showLoginModal: false,
-      pendingCourse: null,
       courses: [
         {
           id: 1,
@@ -329,34 +323,32 @@ export default {
       this.selectedCourse = course
       this.showDetailModal = true
     },
-    openEnrollModal(course) {
-      if (!isAuthenticated()) {
-        this.pendingCourse = course
-        this.showLoginModal = true
-        return
-      }
+    async openEnrollModal(course) {
+      // 未登录则拉起全局登录弹窗，成功后自动继续报名
+      const loggedIn = await requireLogin('报名课程')
+      if (!loggedIn) return
       this.enrollCourse = course
       this.showDetailModal = false
       this.showEnrollModal = true
     },
-    onLoginSuccess() {
-      this.showLoginModal = false
-      if (this.pendingCourse) {
-        this.enrollCourse = this.pendingCourse
-        this.showDetailModal = false
-        this.showEnrollModal = true
-        this.pendingCourse = null
-      }
-    },
     async confirmEnroll() {
       this.enrollLoading = true
-      
-      await new Promise(resolve => setTimeout(resolve, 1500))
-      
+
+      // 受保护写操作：服务端凭令牌把报名任务归入当前账号
+      const result = await api.enrollCourse({ course: this.enrollCourse })
+
+      this.enrollLoading = false
+
+      if (!result.success) {
+        this.showEnrollModal = false
+        this.showNotification('error', '报名失败', result.error || '请稍后重试')
+        return
+      }
+
+      const orderNo = result.data.orderNo
       const expireDate = new Date()
       expireDate.setMonth(expireDate.getMonth() + 6)
-      const orderNo = 'CR' + Date.now().toString().slice(-8)
-      
+
       const courseOrder = {
         orderNo,
         courseName: this.enrollCourse.name,
@@ -368,18 +360,13 @@ export default {
         createTime: new Date().toLocaleString(),
         progress: 0
       }
-      
+
       this.enrollResult = courseOrder
-      this.myCourses.unshift(courseOrder) // 添加到我的课程
-      
-      // 添加到任务中心
-      const enrollInfo = { orderNo }
-      taskStore.addCourseTask(this.enrollCourse, enrollInfo)
-      
-      this.enrollLoading = false
+      this.myCourses.unshift(courseOrder)
+
       this.showEnrollModal = false
       this.showSuccessModal = true
-      
+
       this.showNotification('info', '已添加到任务中心', `您可以在任务中心查看并管理此课程`)
     },
     goToMyCourses() {

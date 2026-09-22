@@ -240,9 +240,7 @@
 <script>
 import Modal from '../components/Modal.vue'
 import Toast from '../components/Toast.vue'
-import { logger } from '../utils/api'
-import { authState } from '../utils/auth'
-import { taskStore } from '../utils/taskStore'
+import { api, logger } from '../utils/api'
 
 export default {
   name: 'Tasks',
@@ -252,6 +250,8 @@ export default {
       activeTab: 'pending',
       activeType: 'all',
       selectedTask: null,
+      tasks: [], // 仅保存当前账号的任务（由服务端按令牌过滤）
+      loading: false,
       showPayModal: false,
       showCancelModal: false,
       showDetailModal: false,
@@ -263,8 +263,7 @@ export default {
       showToast: false,
       toastType: 'success',
       toastTitle: '',
-      toastMessage: '',
-      refreshKey: 0
+      toastMessage: ''
     }
   },
   computed: {
@@ -272,15 +271,11 @@ export default {
       if (!this.selectedTask || this.selectedTask.amount == null) return ''
       return '确认支付 ¥' + this.selectedTask.amount.toLocaleString() + ' 元'
     },
-    allTasks() {
-      this.refreshKey
-      return taskStore.getAll()
-    },
     pendingTasks() {
-      return this.allTasks.filter(task => task.status !== 'completed' && task.status !== 'cancelled')
+      return this.tasks.filter(task => task.status !== 'completed' && task.status !== 'cancelled')
     },
     completedTasks() {
-      return this.allTasks.filter(task => task.status === 'completed')
+      return this.tasks.filter(task => task.status === 'completed')
     },
     pendingCount() {
       return this.pendingTasks.length
@@ -296,20 +291,26 @@ export default {
         return this.currentTabTasks
       }
       return this.currentTabTasks.filter(task => task.type === this.activeType)
-    },
-    isLoggedIn() {
-      return authState.isLoggedIn
     }
   },
   mounted() {
     this.refreshTasks()
   },
-  activated() {
-    this.refreshTasks()
-  },
   methods: {
-    refreshTasks() {
-      this.refreshKey++
+    /**
+     * 从服务端拉取当前账号任务。令牌失效时 request 层会统一回收会话，
+     * App.vue 会把页面重定向回首页，这里不会残留其它账号的数据。
+     */
+    async refreshTasks() {
+      this.loading = true
+      const result = await api.getTasks()
+      this.loading = false
+      if (result.success) {
+        this.tasks = result.data
+      } else if (result.status === 403) {
+        this.showNotification('error', '无权访问', result.error || '不能查看其它账号的任务')
+      }
+      // 401 已由 request 层统一处理
     },
     getTypeText() {
       const typeMap = {
@@ -325,12 +326,12 @@ export default {
     },
     handleAction(task, action) {
       this.selectedTask = { ...task }
-      
+
       if (action.route) {
         this.navigateToRoute(action.route, action.key, task)
         return
       }
-      
+
       const actionMap = {
         pay: () => this.openPayModal(),
         cancel: () => this.openCancelModal(),
@@ -346,7 +347,7 @@ export default {
     },
     navigateToRoute(route, actionKey, task) {
       logger.info('Navigate to business page', { route, actionKey, taskId: task.id, type: task.type })
-      
+
       const query = {}
       if (task.extra) {
         if (task.type === 'booking' && task.extra.tableId) {
@@ -362,7 +363,7 @@ export default {
           query.orderNo = task.extra.orderNo
         }
       }
-      
+
       this.$router.push({ path: route, query })
     },
     openPayModal() {
@@ -377,54 +378,58 @@ export default {
     async confirmPay() {
       if (!this.selectedTask) return
       this.payLoading = true
-      
-      await new Promise(resolve => setTimeout(resolve, 1000))
-      
-      const updatedTask = taskStore.markAsPaid(this.selectedTask.id)
-      
+
+      // 服务端会再次校验令牌与任务归属，他人任务一律拒绝
+      const result = await api.doTaskAction({ taskId: this.selectedTask.id, action: 'pay' })
+
       this.payLoading = false
       this.showPayModal = false
-      
-      if (updatedTask) {
-        this.refreshTasks()
+
+      if (result.success) {
+        await this.refreshTasks()
         this.successTitle = '支付成功'
         this.successMessage = '您的订单已支付成功'
         this.showSuccessModal = true
         logger.info('Payment successful', { taskId: this.selectedTask.id, amount: this.selectedTask.amount })
       } else {
-        this.showNotification('error', '支付失败', '请稍后重试')
+        this.showNotification('error', '支付失败', result.error || '请稍后重试')
       }
     },
     async confirmCancel() {
       if (!this.selectedTask) return
       this.cancelLoading = true
-      
-      await new Promise(resolve => setTimeout(resolve, 800))
-      
-      const result = taskStore.remove(this.selectedTask.id)
-      
+
+      const result = await api.doTaskAction({ taskId: this.selectedTask.id, action: 'cancel' })
+
       this.cancelLoading = false
       this.showCancelModal = false
-      
-      if (result) {
-        this.refreshTasks()
+
+      if (result.success) {
+        await this.refreshTasks()
         this.showNotification('success', '取消成功', '任务已取消')
         logger.info('Task cancelled', { taskId: this.selectedTask.id })
       } else {
-        this.showNotification('error', '取消失败', '请稍后重试')
+        this.showNotification('error', '取消失败', result.error || '请稍后重试')
       }
     },
     async handleRemind() {
       if (!this.selectedTask) return
-      this.showNotification('success', '已提醒', '已提醒卖家尽快发货')
-      logger.info('Reminder sent', { taskId: this.selectedTask.id })
+      const result = await api.doTaskAction({ taskId: this.selectedTask.id, action: 'remind' })
+      if (result.success) {
+        this.showNotification('success', '已提醒', '已提醒卖家尽快发货')
+        logger.info('Reminder sent', { taskId: this.selectedTask.id })
+      } else {
+        this.showNotification('error', '操作失败', result.error || '请稍后重试')
+      }
     },
-    handleConfirm() {
+    async handleConfirm() {
       if (!this.selectedTask) return
-      const result = taskStore.updateStatus(this.selectedTask.id, 'completed')
-      if (result) {
-        this.refreshTasks()
+      const result = await api.doTaskAction({ taskId: this.selectedTask.id, action: 'confirm' })
+      if (result.success) {
+        await this.refreshTasks()
         this.showNotification('success', '确认收货成功', '感谢您的购买')
+      } else {
+        this.showNotification('error', '操作失败', result.error || '请稍后重试')
       }
     },
     handleReview() {

@@ -180,21 +180,18 @@
     </Modal>
 
     <Toast v-model="showToast" :type="toastType" :title="toastTitle" :message="toastMessage" />
-
-    <LoginModal v-model="showLoginModal" @login-success="onLoginSuccess" />
   </div>
 </template>
 
 <script>
 import Modal from '../components/Modal.vue'
 import Toast from '../components/Toast.vue'
-import LoginModal from '../components/LoginModal.vue'
-import { isAuthenticated } from '../utils/auth'
-import { taskStore } from '../utils/taskStore'
+import { requireLogin, isAuthenticated } from '../utils/auth'
+import { api } from '../utils/api'
 
 export default {
   name: 'Shop',
-  components: { Modal, Toast, LoginModal },
+  components: { Modal, Toast },
   data() {
     return {
       selectedCategory: 'all',
@@ -214,7 +211,6 @@ export default {
       toastType: 'success',
       toastTitle: '',
       toastMessage: '',
-      showLoginModal: false,
       pendingAction: null,
       pendingProduct: null,
       categories: [
@@ -263,42 +259,54 @@ export default {
       this.quantity = 1
       this.showDetailModal = true
     },
-    checkLoginRequired(action, product = null) {
-      if (!isAuthenticated()) {
-        this.pendingAction = action
-        this.pendingProduct = product
-        this.showLoginModal = true
+    /**
+     * 受保护操作前的登录检查：未登录则拉起全局登录弹窗。
+     * 登录成功后统一调用 resumePendingAction 恢复原操作，取消则中止。
+     * @returns {Promise<boolean>}
+     */
+    async checkLoginRequired(action, product = null) {
+      if (isAuthenticated()) return true
+      this.pendingAction = action
+      this.pendingProduct = product
+      const loggedIn = await requireLogin('购买商品')
+      if (!loggedIn) {
+        this.pendingAction = null
+        this.pendingProduct = null
         return false
       }
-      return true
+      await this.resumePendingAction()
+      return false // 原调用本次结束，操作已在恢复流程中执行
     },
-    onLoginSuccess() {
-      this.showLoginModal = false
-      if (this.pendingAction === 'quickAdd' && this.pendingProduct) {
+    /** 登录成功后恢复用户触发的原始操作 */
+    async resumePendingAction() {
+      const action = this.pendingAction
+      if (action === 'quickAdd' && this.pendingProduct) {
         this.addToCart(this.pendingProduct, 1)
         this.showNotification('success', '已加入购物车', this.pendingProduct.name)
-      } else if (this.pendingAction === 'addFromDetail') {
+      } else if (action === 'addFromDetail') {
         this.addToCart(this.selectedProduct, this.quantity)
         this.showNotification('success', '已加入购物车', `${this.selectedProduct.name} x${this.quantity}`)
         this.showDetailModal = false
-      } else if (this.pendingAction === 'buyNow') {
+      } else if (action === 'buyNow') {
         this.cart = [{ ...this.selectedProduct, qty: this.quantity }]
         this.showDetailModal = false
         this.showCheckoutModal = true
-      } else if (this.pendingAction === 'checkout') {
+      } else if (action === 'checkout') {
         this.showCartModal = false
         this.showCheckoutModal = true
       }
       this.pendingAction = null
       this.pendingProduct = null
     },
-    quickAddToCart(product) {
-      if (!this.checkLoginRequired('quickAdd', product)) return
+    async quickAddToCart(product) {
+      const allowed = await this.checkLoginRequired('quickAdd', product)
+      if (!allowed) return
       this.addToCart(product, 1)
       this.showNotification('success', '已加入购物车', product.name)
     },
-    addToCartFromDetail() {
-      if (!this.checkLoginRequired('addFromDetail')) return
+    async addToCartFromDetail() {
+      const allowed = await this.checkLoginRequired('addFromDetail')
+      if (!allowed) return
       this.addToCart(this.selectedProduct, this.quantity)
       this.showNotification('success', '已加入购物车', `${this.selectedProduct.name} x${this.quantity}`)
       this.showDetailModal = false
@@ -309,38 +317,56 @@ export default {
       else { this.cart.push({ ...product, qty }) }
     },
     removeFromCart(index) { this.cart.splice(index, 1) },
-    buyNow() {
-      if (!this.checkLoginRequired('buyNow')) return
+    async buyNow() {
+      const allowed = await this.checkLoginRequired('buyNow')
+      if (!allowed) return
       this.cart = [{ ...this.selectedProduct, qty: this.quantity }]
       this.showDetailModal = false
       this.showCheckoutModal = true
     },
-    checkout() {
-      if (!this.checkLoginRequired('checkout')) return
+    async checkout() {
+      const allowed = await this.checkLoginRequired('checkout')
+      if (!allowed) return
       this.showCartModal = false
       this.showCheckoutModal = true
     },
     async confirmCheckout() {
       this.checkoutLoading = true
-      await new Promise(resolve => setTimeout(resolve, 1500))
-      const order = {
-        orderNo: 'SP' + Date.now().toString().slice(-8),
+
+      // 受保护写操作：订单只归属当前令牌账号
+      const result = await api.createOrder({
         amount: this.cartTotal,
+        items: this.cart.map(item => ({
+          id: item.id,
+          name: item.name,
+          icon: item.icon,
+          price: item.price,
+          qty: item.qty
+        }))
+      })
+
+      this.checkoutLoading = false
+
+      if (!result.success) {
+        this.showCheckoutModal = false
+        this.showNotification('error', '下单失败', result.error || '请稍后重试')
+        return
+      }
+
+      const order = {
+        orderNo: result.data.orderNo,
+        amount: result.data.amount,
         items: [...this.cart],
-        status: 'paid',
-        createTime: new Date().toLocaleString()
+        status: result.data.status,
+        createTime: result.data.createTime
       }
       this.orderResult = order
-      this.orders.unshift(order) // 添加到订单列表
+      this.orders.unshift(order)
       this.cart = []
-      
-      // 添加到任务中心
-      taskStore.addOrderTask(order)
-      
-      this.checkoutLoading = false
+
       this.showCheckoutModal = false
       this.showSuccessModal = true
-      
+
       this.showNotification('info', '已添加到任务中心', `您可以在任务中心查看并管理此订单`)
     },
     showNotification(type, title, message) {
