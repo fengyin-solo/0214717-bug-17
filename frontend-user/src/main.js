@@ -1,10 +1,16 @@
 import { createApp } from 'vue'
 import App from './App.vue'
 import router from './router'
-import { initAuth } from './utils/auth'
+import { initAuth, handleInvalidSession } from './utils/auth'
+import { setUnauthorizedHandler } from './utils/api'
 import { logger } from './utils/api'
 
-// 初始化认证状态
+// API 层检测到令牌失效/过期/越权时，统一交由认证层清理会话
+setUnauthorizedHandler((reason) => {
+  handleInvalidSession(reason)
+})
+
+// 初始化认证状态（严格校验本地令牌）
 initAuth()
 
 // 全局错误处理

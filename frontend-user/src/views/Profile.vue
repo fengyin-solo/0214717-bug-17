@@ -124,7 +124,7 @@
 <script>
 import Modal from '../components/Modal.vue'
 import Toast from '../components/Toast.vue'
-import { authState, logout } from '../utils/auth'
+import { authState, logout, updateCurrentUser } from '../utils/auth'
 import { logger } from '../utils/api'
 
 export default {
@@ -218,14 +218,19 @@ export default {
         return
       }
       this.saveLoading = true
-      await new Promise(resolve => setTimeout(resolve, 1000))
-      if (authState.user) {
-        authState.user.name = this.editForm.name
-      }
+      const result = await updateCurrentUser({
+        name: this.editForm.name.trim(),
+        phone: this.editForm.phone.trim(),
+        email: this.editForm.email.trim()
+      })
       this.saveLoading = false
       this.showEditModal = false
-      this.showNotification('success', '保存成功', '个人资料已更新')
-      logger.info('Profile updated', { name: this.editForm.name })
+      if (result.success) {
+        this.showNotification('success', '保存成功', '个人资料已更新')
+        logger.info('Profile updated', { name: this.editForm.name })
+      } else {
+        this.showNotification('error', '保存失败', result.error || '请稍后重试')
+      }
     },
     viewBookingDetail(booking) { this.selectedBooking = booking; this.showBookingDetailModal = true },
     handleBookingAction() {
@@ -243,9 +248,10 @@ export default {
         this.showNotification('info', action.name, '功能开发中，敬请期待')
       }
     },
-    exchangeGift(gift) {
-      if (authState.user && authState.user.points >= gift.points) {
-        authState.user.points -= gift.points
+    async exchangeGift(gift) {
+      if (!authState.user || authState.user.points < gift.points) return
+      const result = await updateCurrentUser({ points: authState.user.points - gift.points })
+      if (result.success) {
         this.showExchangeModal = false
         this.successTitle = '兑换成功'
         this.successMessage = `您已成功兑换 ${gift.name}`
@@ -257,7 +263,10 @@ export default {
       this.showLogoutModal = false
       logger.info('User logging out')
       await logout()
-      this.$router.push('/login')
+      // 退出后回到首页（/login 不是真实页面，避免落在错误状态）
+      if (this.$route.path !== '/') {
+        this.$router.replace('/')
+      }
     },
     showNotification(type, title, message) { this.toastType = type; this.toastTitle = title; this.toastMessage = message; this.showToast = true }
   }

@@ -78,7 +78,8 @@ import { logger } from '../utils/api'
 export default {
   name: 'LoginModal',
   props: { modelValue: Boolean },
-  emits: ['update:modelValue', 'success'],
+  // 同时触发 success / login-success，兼容全局与页面级监听
+  emits: ['update:modelValue', 'success', 'login-success'],
   data() {
     return { username: '', password: '', showPassword: false, loading: false, error: null }
   },
@@ -86,6 +87,8 @@ export default {
     close() { this.$emit('update:modelValue', false) },
     async handleLogin() {
       this.error = null
+      // 防止重复提交（快速点击登录）
+      if (this.loading) return
       // 表单验证
       if (!this.username || this.username.trim().length < 2) {
         this.error = '用户名至少需要2个字符'
@@ -98,13 +101,16 @@ export default {
       this.loading = true
       try {
         logger.info('Login attempt', { username: this.username })
-        const result = await login(this.username, this.password)
+        const result = await login(this.username.trim(), this.password)
         if (result.success) {
           logger.info('Login successful')
-          this.$emit('success', result.user)
+          // 关闭弹窗并清空表单
           this.close()
           this.username = ''
           this.password = ''
+          // 全局 App.vue 监听 success；保留 login-success 兼容事件
+          this.$emit('success', result.user)
+          this.$emit('login-success', result.user)
         } else {
           this.error = result.error || '登录失败'
         }

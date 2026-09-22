@@ -120,21 +120,18 @@
     </Modal>
 
     <Toast v-model="showToast" :type="toastType" :title="toastTitle" :message="toastMessage" />
-
-    <LoginModal v-model="showLoginModal" @login-success="onLoginSuccess" />
   </div>
 </template>
 
 <script>
 import Modal from '../components/Modal.vue'
 import Toast from '../components/Toast.vue'
-import LoginModal from '../components/LoginModal.vue'
-import { isAuthenticated } from '../utils/auth'
+import { requireAuth } from '../utils/auth'
 import { taskStore } from '../utils/taskStore'
 
 export default {
   name: 'Competitions',
-  components: { Modal, Toast, LoginModal },
+  components: { Modal, Toast },
   data() {
     return {
       activeTab: 'upcoming',
@@ -149,8 +146,6 @@ export default {
       toastType: 'success',
       toastTitle: '',
       toastMessage: '',
-      showLoginModal: false,
-      pendingComp: null,
       tabs: [
         { id: 'upcoming', name: '即将开始', icon: '📅' },
         { id: 'ongoing', name: '进行中', icon: '🔴' },
@@ -178,24 +173,14 @@ export default {
     handleAction(comp) {
       this.selectedComp = comp
       if (comp.status === 'upcoming') {
-        // 报名需要登录
-        if (!isAuthenticated()) {
-          this.pendingComp = comp
-          this.showLoginModal = true
-          return
-        }
-        this.showJoinModal = true
+        // 报名为受保护操作：未登录弹出全局登录框，登录成功后自动继续
+        requireAuth(() => {
+          this.selectedComp = comp
+          this.showJoinModal = true
+        })
       }
       else if (comp.status === 'ongoing') this.showLiveModal = true
       else this.showResultModal = true
-    },
-    onLoginSuccess() {
-      this.showLoginModal = false
-      if (this.pendingComp) {
-        this.selectedComp = this.pendingComp
-        this.showJoinModal = true
-        this.pendingComp = null
-      }
     },
     async confirmJoin() {
       this.joinLoading = true

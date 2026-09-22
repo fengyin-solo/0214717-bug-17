@@ -15,8 +15,8 @@
 <template>
   <div id="app">
     <!-- 导航栏组件 -->
-    <NavBar 
-      :is-logged-in="isLoggedIn" 
+    <NavBar
+      :is-logged-in="isLoggedIn"
       :user-name="userName"
       @login-click="openLogin"
     />
@@ -33,8 +33,8 @@
     <!-- 页脚组件 -->
     <FooterBar />
     
-    <!-- 登录弹窗 -->
-    <LoginModal v-model="showLoginModal" @success="onLoginSuccess" />
+    <!-- 全局唯一登录弹窗：受保护操作统一通过 requireAuth 唤起，避免多实例冲突 -->
+    <LoginModal v-model="loginModalVisible" @success="onLoginSuccess" />
   </div>
 </template>
 
@@ -43,24 +43,31 @@
  * 应用根组件
  * 负责整合全局布局组件和管理登录状态
  */
-import { authState } from './utils/auth'
+import { authState, loginGate, closeLoginModal, openLoginModal } from './utils/auth'
 import NavBar from './components/NavBar.vue'
 import FooterBar from './components/FooterBar.vue'
 import LoginModal from './components/LoginModal.vue'
 
 export default {
   name: 'App',
-  components: { 
+  components: {
     NavBar,
     FooterBar,
-    LoginModal 
-  },
-  data() {
-    return {
-      showLoginModal: false // 登录弹窗显示状态
-    }
+    LoginModal
   },
   computed: {
+    /**
+     * 登录弹窗显示状态（与全局 loginGate 双向绑定）
+     * 点击遮罩/关闭按钮视为取消，丢弃待继续的受保护操作
+     */
+    loginModalVisible: {
+      get() {
+        return loginGate.visible
+      },
+      set(visible) {
+        if (!visible) closeLoginModal(true)
+      }
+    },
     /**
      * 获取用户登录状态
      * @returns {boolean} 是否已登录
@@ -78,17 +85,17 @@ export default {
   },
   methods: {
     /**
-     * 打开登录弹窗
+     * 打开全局登录弹窗
      */
     openLogin() {
-      this.showLoginModal = true
+      openLoginModal()
     },
     /**
      * 登录成功回调
-     * 可在此处添加登录成功后的全局处理逻辑
+     * 登录后的会话恢复与待执行操作由 auth 模块统一处理
      */
     onLoginSuccess() {
-      // 登录成功后的处理
+      // 弹窗已在 login() 中关闭，此处仅作扩展点
     }
   }
 }

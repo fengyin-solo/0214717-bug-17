@@ -240,7 +240,7 @@
 <script>
 import Modal from '../components/Modal.vue'
 import Toast from '../components/Toast.vue'
-import { logger } from '../utils/api'
+import { api, logger } from '../utils/api'
 import { authState } from '../utils/auth'
 import { taskStore } from '../utils/taskStore'
 
@@ -377,41 +377,43 @@ export default {
     async confirmPay() {
       if (!this.selectedTask) return
       this.payLoading = true
-      
-      await new Promise(resolve => setTimeout(resolve, 1000))
-      
-      const updatedTask = taskStore.markAsPaid(this.selectedTask.id)
-      
+
+      // 走 API 授权层：令牌有效且任务归属本人才能支付
+      const result = await api.doTaskAction({ taskId: this.selectedTask.id, action: 'pay' })
+
       this.payLoading = false
       this.showPayModal = false
-      
-      if (updatedTask) {
+
+      if (result.success && result.data?.success) {
         this.refreshTasks()
         this.successTitle = '支付成功'
         this.successMessage = '您的订单已支付成功'
         this.showSuccessModal = true
         logger.info('Payment successful', { taskId: this.selectedTask.id, amount: this.selectedTask.amount })
+      } else if (result.status === 401 || result.code === 'expired') {
+        this.showNotification('error', '登录已失效', result.error || '请重新登录')
       } else {
-        this.showNotification('error', '支付失败', '请稍后重试')
+        this.showNotification('error', '支付失败', result.data?.message || result.error || '请稍后重试')
       }
     },
     async confirmCancel() {
       if (!this.selectedTask) return
       this.cancelLoading = true
-      
-      await new Promise(resolve => setTimeout(resolve, 800))
-      
-      const result = taskStore.remove(this.selectedTask.id)
-      
+
+      // 走 API 授权层：不能取消他人任务
+      const result = await api.doTaskAction({ taskId: this.selectedTask.id, action: 'cancel' })
+
       this.cancelLoading = false
       this.showCancelModal = false
-      
-      if (result) {
+
+      if (result.success && result.data?.success) {
         this.refreshTasks()
         this.showNotification('success', '取消成功', '任务已取消')
         logger.info('Task cancelled', { taskId: this.selectedTask.id })
+      } else if (result.status === 401) {
+        this.showNotification('error', '登录已失效', result.error || '请重新登录')
       } else {
-        this.showNotification('error', '取消失败', '请稍后重试')
+        this.showNotification('error', '取消失败', result.data?.message || result.error || '请稍后重试')
       }
     },
     async handleRemind() {
@@ -419,12 +421,14 @@ export default {
       this.showNotification('success', '已提醒', '已提醒卖家尽快发货')
       logger.info('Reminder sent', { taskId: this.selectedTask.id })
     },
-    handleConfirm() {
+    async handleConfirm() {
       if (!this.selectedTask) return
-      const result = taskStore.updateStatus(this.selectedTask.id, 'completed')
-      if (result) {
+      const result = await api.doTaskAction({ taskId: this.selectedTask.id, action: 'confirm' })
+      if (result.success && result.data?.success) {
         this.refreshTasks()
         this.showNotification('success', '确认收货成功', '感谢您的购买')
+      } else if (result.status === 401) {
+        this.showNotification('error', '登录已失效', result.error || '请重新登录')
       }
     },
     handleReview() {

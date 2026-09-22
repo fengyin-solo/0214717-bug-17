@@ -1,9 +1,19 @@
 /**
  * 任务中心存储管理
  * 统一管理预约、报名、订单等任务数据，使用 localStorage 持久化
+ *
+ * 归属隔离：
+ * - 存储键按用户ID隔离（billiard_user_tasks_<userId>）
+ * - 所有读写必须先绑定当前用户（bindUser），或显式传入 userId
+ * - 未绑定用户时拒绝读写，避免游客/串号会话看到或改动他人数据
+ * - 退出登录时调用 clearUserData 清除该账号的本地任务
  */
 
-const STORAGE_KEY = 'billiard_user_tasks'
+const STORAGE_KEY_PREFIX = 'billiard_user_tasks_'
+
+/** 当前绑定的用户ID（由 auth 在登录/恢复会话时设置） */
+let currentUserId = null
+
 const logger = {
   info: (...args) => console.log('[taskStore]', ...args),
   warn: (...args) => console.warn('[taskStore]', ...args),
@@ -106,19 +116,74 @@ const statusConfig = {
   cancelled: { text: '已取消', type: 'success' }
 }
 
-function loadTasks() {
+/** 旧版本未按用户隔离的全局存储键，用于一次性清理历史残留数据 */
+const LEGACY_STORAGE_KEY = 'billiard_user_tasks'
+
+/**
+ * 获取指定用户的存储键
+ * @param {string} userId
+ * @returns {string}
+ */
+function storageKeyFor(userId) {
+  return `${STORAGE_KEY_PREFIX}${userId}`
+}
+
+/**
+ * 绑定当前登录用户（由 auth 模块调用）
+ * @param {string|null} userId
+ */
+function bindUser(userId) {
+  currentUserId = userId || null
+}
+
+/**
+ * 解析本次操作使用的用户ID：显式传入优先，否则用当前绑定用户
+ * @param {string} [userId]
+ * @returns {string|null}
+ */
+function resolveUserId(userId) {
+  return userId || currentUserId
+}
+
+function loadTasks(userId) {
+  const ownerId = resolveUserId(userId)
+  if (!ownerId) {
+    logger.warn('未绑定用户，拒绝读取任务')
+    return []
+  }
+  const key = storageKeyFor(ownerId)
   try {
-    const stored = localStorage.getItem(STORAGE_KEY)
-    return stored ? JSON.parse(stored) : getDefaultTasks()
+    const stored = localStorage.getItem(key)
+    if (stored) {
+      const parsed = JSON.parse(stored)
+      // 仅接受归属于该用户的数据结构
+      if (parsed && parsed.userId === ownerId && Array.isArray(parsed.tasks)) {
+        return parsed.tasks
+      }
+      logger.warn('任务数据归属不匹配或结构损坏，已忽略', { ownerId })
+      return []
+    }
+    // 首次访问：为该用户初始化演示任务
+    const defaults = getDefaultTasks()
+    saveTasks(defaults, ownerId)
+    return defaults
   } catch (e) {
     logger.error('加载任务失败', e)
-    return getDefaultTasks()
+    return []
   }
 }
 
-function saveTasks(tasks) {
+function saveTasks(tasks, userId) {
+  const ownerId = resolveUserId(userId)
+  if (!ownerId) {
+    logger.warn('未绑定用户，拒绝保存任务')
+    return false
+  }
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks))
+    localStorage.setItem(
+      storageKeyFor(ownerId),
+      JSON.stringify({ userId: ownerId, tasks })
+    )
     return true
   } catch (e) {
     logger.error('保存任务失败', e)
@@ -197,15 +262,43 @@ function enrichTask(task) {
 }
 
 export const taskStore = {
-  getAll() {
-    const tasks = loadTasks()
-    return tasks.map(enrichTask).sort((a, b) => 
+  /** 当前绑定的用户ID */
+  get currentUserId() {
+    return currentUserId
+  },
+
+  bindUser,
+
+  /**
+   * 清除指定用户（默认当前用户）的全部本地任务
+   * 同时清理旧版本的全局任务数据
+   * @param {string} [userId]
+   */
+  clearUserData(userId) {
+    const ownerId = resolveUserId(userId)
+    try {
+      if (ownerId) {
+        localStorage.removeItem(storageKeyFor(ownerId))
+      }
+      localStorage.removeItem(LEGACY_STORAGE_KEY)
+    } catch (e) {
+      logger.error('清除任务数据失败', e)
+    }
+    if (!ownerId || ownerId === currentUserId) {
+      currentUserId = null
+    }
+    logger.info('用户任务数据已清除', { ownerId })
+  },
+
+  getAll(userId) {
+    const tasks = loadTasks(userId)
+    return tasks.map(enrichTask).sort((a, b) =>
       new Date(b.createdAt) - new Date(a.createdAt)
     )
   },
 
-  getByStatus(status) {
-    const tasks = this.getAll()
+  getByStatus(status, userId) {
+    const tasks = this.getAll(userId)
     if (status === 'pending') {
       return tasks.filter(t => t.status !== 'completed' && t.status !== 'cancelled')
     }
@@ -215,60 +308,60 @@ export const taskStore = {
     return tasks
   },
 
-  getById(taskId) {
-    const tasks = loadTasks()
+  getById(taskId, userId) {
+    const tasks = loadTasks(userId)
     const task = tasks.find(t => t.id === taskId)
     return task ? enrichTask(task) : null
   },
 
-  add(taskData) {
-    const tasks = loadTasks()
+  add(taskData, userId) {
+    const tasks = loadTasks(userId)
     const newTask = {
       id: generateTaskId(),
       createdAt: formatDate(new Date()),
       ...taskData
     }
     tasks.unshift(newTask)
-    saveTasks(tasks)
+    saveTasks(tasks, userId)
     logger.info('任务已添加', newTask)
     return enrichTask(newTask)
   },
 
-  update(taskId, updates) {
-    const tasks = loadTasks()
+  update(taskId, updates, userId) {
+    const tasks = loadTasks(userId)
     const index = tasks.findIndex(t => t.id === taskId)
     if (index === -1) {
       logger.warn('任务不存在', taskId)
       return null
     }
     tasks[index] = { ...tasks[index], ...updates }
-    saveTasks(tasks)
+    saveTasks(tasks, userId)
     logger.info('任务已更新', taskId, updates)
     return enrichTask(tasks[index])
   },
 
-  updateStatus(taskId, newStatus) {
+  updateStatus(taskId, newStatus, userId) {
     const statusInfo = statusConfig[newStatus]
     if (!statusInfo) {
       logger.error('无效的状态', newStatus)
       return null
     }
-    return this.update(taskId, { status: newStatus })
+    return this.update(taskId, { status: newStatus }, userId)
   },
 
-  remove(taskId) {
-    const tasks = loadTasks()
+  remove(taskId, userId) {
+    const tasks = loadTasks(userId)
     const filtered = tasks.filter(t => t.id !== taskId)
     if (filtered.length === tasks.length) {
       logger.warn('任务不存在，无法删除', taskId)
       return false
     }
-    saveTasks(filtered)
+    saveTasks(filtered, userId)
     logger.info('任务已删除', taskId)
     return true
   },
 
-  addBookingTask(table, bookingInfo) {
+  addBookingTask(table, bookingInfo, userId) {
     return this.add({
       type: 'booking',
       title: `${table.name} - ${table.type}`,
@@ -282,10 +375,10 @@ export const taskStore = {
         duration: bookingInfo.duration,
         orderNo: bookingInfo.orderNo
       }
-    })
+    }, userId)
   },
 
-  addCourseTask(course, enrollInfo) {
+  addCourseTask(course, enrollInfo, userId) {
     return this.add({
       type: 'course',
       title: course.name,
@@ -298,10 +391,10 @@ export const taskStore = {
         coach: course.coach,
         lessons: course.lessons
       }
-    })
+    }, userId)
   },
 
-  addCompetitionTask(competition, regInfo) {
+  addCompetitionTask(competition, regInfo, userId) {
     return this.add({
       type: 'competition',
       title: competition.name,
@@ -314,10 +407,10 @@ export const taskStore = {
         playerNo: regInfo.playerNo,
         date: competition.date
       }
-    })
+    }, userId)
   },
 
-  addOrderTask(order) {
+  addOrderTask(order, userId) {
     return this.add({
       type: 'order',
       title: order.items.map(i => i.name).join('、'),
@@ -329,16 +422,16 @@ export const taskStore = {
         items: order.items,
         createTime: order.createTime
       }
-    })
+    }, userId)
   },
 
-  markAsPaid(taskId) {
-    const task = this.getById(taskId)
+  markAsPaid(taskId, userId) {
+    const task = this.getById(taskId, userId)
     if (!task) return null
-    
+
     let newStatus = 'upcoming'
     let newSubtitle = '支付成功'
-    
+
     if (task.type === 'order') {
       newStatus = 'pending_shipment'
       newSubtitle = '支付成功，待发货'
@@ -347,20 +440,20 @@ export const taskStore = {
     } else if (task.type === 'booking') {
       newSubtitle = '支付成功，等待使用'
     }
-    
-    return this.update(taskId, { status: newStatus, subtitle: newSubtitle })
+
+    return this.update(taskId, { status: newStatus, subtitle: newSubtitle }, userId)
   },
 
-  getPendingCount() {
-    return this.getByStatus('pending').length
+  getPendingCount(userId) {
+    return this.getByStatus('pending', userId).length
   },
 
-  getCompletedCount() {
-    return this.getByStatus('completed').length
+  getCompletedCount(userId) {
+    return this.getByStatus('completed', userId).length
   },
 
-  clearAll() {
-    saveTasks([])
+  clearAll(userId) {
+    saveTasks([], userId)
     logger.info('所有任务已清除')
   }
 }

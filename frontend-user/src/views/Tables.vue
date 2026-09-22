@@ -202,22 +202,18 @@
 
     <!-- Toast -->
     <Toast v-model="showToast" :type="toastType" :title="toastTitle" :message="toastMessage" />
-
-    <!-- Login Modal -->
-    <LoginModal v-model="showLoginModal" @login-success="onLoginSuccess" />
   </div>
 </template>
 
 <script>
 import Modal from '../components/Modal.vue'
 import Toast from '../components/Toast.vue'
-import LoginModal from '../components/LoginModal.vue'
-import { isAuthenticated } from '../utils/auth'
+import { requireAuth } from '../utils/auth'
 import { taskStore } from '../utils/taskStore'
 
 export default {
   name: 'Tables',
-  components: { Modal, Toast, LoginModal },
+  components: { Modal, Toast },
   data() {
     return {
       selectedType: 'all',
@@ -237,8 +233,6 @@ export default {
       toastType: 'success',
       toastTitle: '',
       toastMessage: '',
-      showLoginModal: false,
-      pendingTable: null,
       tableTypes: [
         { id: 'all', name: '全部', icon: '🎱' },
         { id: 'snooker', name: '斯诺克', icon: '🟢' },
@@ -290,27 +284,14 @@ export default {
       this.isLoadingTables = false
     },
     openBooking(table) {
-      // 检查是否已登录
-      if (!isAuthenticated()) {
-        this.pendingTable = table
-        this.showLoginModal = true
-        return
-      }
-      this.selectedTable = table
-      this.bookingDate = this.selectedDate
-      this.selectedTimeSlot = 1
-      this.duration = 2
-      this.showBookingModal = true
-    },
-    /**
-     * 登录成功回调
-     */
-    onLoginSuccess() {
-      this.showLoginModal = false
-      if (this.pendingTable) {
-        this.openBooking(this.pendingTable)
-        this.pendingTable = null
-      }
+      // 受保护操作：未登录弹出全局登录框，登录成功后自动继续预约
+      requireAuth(() => {
+        this.selectedTable = table
+        this.bookingDate = this.selectedDate
+        this.selectedTimeSlot = 1
+        this.duration = 2
+        this.showBookingModal = true
+      })
     },
     async confirmBooking() {
       this.bookingLoading = true

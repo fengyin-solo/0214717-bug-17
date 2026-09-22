@@ -195,9 +195,6 @@
     <!-- Toast -->
     <Toast v-model="showToast" :type="toastType" :title="toastTitle" :message="toastMessage" />
 
-    <!-- Login Modal -->
-    <LoginModal v-model="showLoginModal" @login-success="onLoginSuccess" />
-
     <!-- My Courses Modal -->
     <Modal v-model="showMyCoursesModal" title="我的课程" size="medium" :show-footer="false">
       <div class="my-courses-content">
@@ -227,13 +224,12 @@
 <script>
 import Modal from '../components/Modal.vue'
 import Toast from '../components/Toast.vue'
-import LoginModal from '../components/LoginModal.vue'
-import { isAuthenticated } from '../utils/auth'
+import { requireAuth } from '../utils/auth'
 import { taskStore } from '../utils/taskStore'
 
 export default {
   name: 'Courses',
-  components: { Modal, Toast, LoginModal },
+  components: { Modal, Toast },
   data() {
     return {
       showDetailModal: false,
@@ -249,8 +245,6 @@ export default {
       toastType: 'success',
       toastTitle: '',
       toastMessage: '',
-      showLoginModal: false,
-      pendingCourse: null,
       courses: [
         {
           id: 1,
@@ -330,23 +324,12 @@ export default {
       this.showDetailModal = true
     },
     openEnrollModal(course) {
-      if (!isAuthenticated()) {
-        this.pendingCourse = course
-        this.showLoginModal = true
-        return
-      }
-      this.enrollCourse = course
-      this.showDetailModal = false
-      this.showEnrollModal = true
-    },
-    onLoginSuccess() {
-      this.showLoginModal = false
-      if (this.pendingCourse) {
-        this.enrollCourse = this.pendingCourse
+      // 受保护操作：未登录弹出全局登录框，登录成功后自动继续报名
+      requireAuth(() => {
+        this.enrollCourse = course
         this.showDetailModal = false
         this.showEnrollModal = true
-        this.pendingCourse = null
-      }
+      })
     },
     async confirmEnroll() {
       this.enrollLoading = true

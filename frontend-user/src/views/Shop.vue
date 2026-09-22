@@ -180,21 +180,18 @@
     </Modal>
 
     <Toast v-model="showToast" :type="toastType" :title="toastTitle" :message="toastMessage" />
-
-    <LoginModal v-model="showLoginModal" @login-success="onLoginSuccess" />
   </div>
 </template>
 
 <script>
 import Modal from '../components/Modal.vue'
 import Toast from '../components/Toast.vue'
-import LoginModal from '../components/LoginModal.vue'
-import { isAuthenticated } from '../utils/auth'
+import { requireAuth } from '../utils/auth'
 import { taskStore } from '../utils/taskStore'
 
 export default {
   name: 'Shop',
-  components: { Modal, Toast, LoginModal },
+  components: { Modal, Toast },
   data() {
     return {
       selectedCategory: 'all',
@@ -214,9 +211,6 @@ export default {
       toastType: 'success',
       toastTitle: '',
       toastMessage: '',
-      showLoginModal: false,
-      pendingAction: null,
-      pendingProduct: null,
       categories: [
         { id: 'all', name: '全部商品', icon: '🏷️' },
         { id: 'cue', name: '球杆', icon: '🏏' },
@@ -263,34 +257,28 @@ export default {
       this.quantity = 1
       this.showDetailModal = true
     },
+    /**
+     * 受保护操作入口：未登录弹全局登录框，登录成功后继续
+     */
     checkLoginRequired(action, product = null) {
-      if (!isAuthenticated()) {
-        this.pendingAction = action
-        this.pendingProduct = product
-        this.showLoginModal = true
-        return false
-      }
-      return true
+      return requireAuth(() => this.runAfterLogin(action, product))
     },
-    onLoginSuccess() {
-      this.showLoginModal = false
-      if (this.pendingAction === 'quickAdd' && this.pendingProduct) {
-        this.addToCart(this.pendingProduct, 1)
-        this.showNotification('success', '已加入购物车', this.pendingProduct.name)
-      } else if (this.pendingAction === 'addFromDetail') {
+    runAfterLogin(action, product) {
+      if (action === 'quickAdd' && product) {
+        this.addToCart(product, 1)
+        this.showNotification('success', '已加入购物车', product.name)
+      } else if (action === 'addFromDetail') {
         this.addToCart(this.selectedProduct, this.quantity)
         this.showNotification('success', '已加入购物车', `${this.selectedProduct.name} x${this.quantity}`)
         this.showDetailModal = false
-      } else if (this.pendingAction === 'buyNow') {
+      } else if (action === 'buyNow') {
         this.cart = [{ ...this.selectedProduct, qty: this.quantity }]
         this.showDetailModal = false
         this.showCheckoutModal = true
-      } else if (this.pendingAction === 'checkout') {
+      } else if (action === 'checkout') {
         this.showCartModal = false
         this.showCheckoutModal = true
       }
-      this.pendingAction = null
-      this.pendingProduct = null
     },
     quickAddToCart(product) {
       if (!this.checkLoginRequired('quickAdd', product)) return
